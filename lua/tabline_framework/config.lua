@@ -16,7 +16,6 @@ Config.get_viewport_opts = function(t)
     left_arrow = viewport.left_arrow or '◀',
     right_arrow = viewport.right_arrow or '▶',
     arrow_padding = viewport.arrow_padding or ' ',
-    tab_padding = viewport.tab_padding or 4,
   }
 end
 

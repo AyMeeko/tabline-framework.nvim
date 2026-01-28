@@ -31,10 +31,12 @@ local function calculate_viewport(active_index, total_tabs, available_width, tab
   local state = Config:get_viewport_state()
   local vp_start = state.start
 
+  -- Ensure active tab is visible by adjusting start if needed
   if active_index < vp_start then
     vp_start = active_index
   end
 
+  -- Calculate how many tabs fit starting from vp_start
   local vp_end = vp_start
   local current_width = 0
   local left_arrow_space = vp_start > 1 and arrow_width or 0
@@ -51,6 +53,7 @@ local function calculate_viewport(active_index, total_tabs, available_width, tab
     end
   end
 
+  -- If active tab is still not visible, scroll forward to show it
   if active_index > vp_end then
     vp_end = active_index
     current_width = tab_widths[active_index]
@@ -58,6 +61,7 @@ local function calculate_viewport(active_index, total_tabs, available_width, tab
 
     local right_arrow_space = vp_end < total_tabs and arrow_width or 0
 
+    -- Fill backwards from active tab
     for i = active_index - 1, 1, -1 do
       local left_arrow_space_needed = i > 1 and arrow_width or 0
       local tab_width = tab_widths[i]
@@ -79,6 +83,48 @@ local function calculate_viewport(active_index, total_tabs, available_width, tab
   viewport.has_right_overflow = vp_end < total_tabs
 
   return viewport
+end
+
+-- Render a single tab to a temporary collector and return its info
+local function measure_tab(tabline_instance, callback, tab_info, tabs, current_tab)
+  local temp_collector = Collector()
+  local original_collector = tabline_instance.collector
+  tabline_instance.collector = temp_collector
+
+  local i = tab_info.index
+  local v = tab_info.tab
+  local current = v == current_tab
+
+  if current then
+    tabline_instance:use_tabline_sel_colors()
+  else
+    tabline_instance:use_tabline_colors()
+  end
+
+  tabline_instance:add('%' .. i .. 'T')
+
+  CurrentTab = i
+  callback({
+    before_current = tabs[i + 1] and tabs[i + 1] == current_tab,
+    after_current  = tabs[i - 1] and tabs[i - 1] == current_tab,
+    first = i == 1,
+    last = i == #tabs,
+    index = i,
+    tab = v,
+    current = current,
+    win = tab_info.win,
+    buf = tab_info.buf,
+    buf_nr = tab_info.buf,
+    buf_name = tab_info.buf_name,
+    filename = tab_info.filename,
+    modified = tab_info.modified,
+  })
+  CurrentTab = nil
+
+  local width = temp_collector:get_width()
+
+  tabline_instance.collector = original_collector
+  return width
 end
 
 function Tabline:use_tabline_colors()
@@ -110,6 +156,7 @@ function Tabline:make_tabs(callback, list)
   local tab_widths = {}
   local tab_info_cache = {}
 
+  -- First pass: gather tab info and measure widths
   for i, v in ipairs(tabs) do
     if v == current_tab then
       current_index = i
@@ -122,6 +169,7 @@ function Tabline:make_tabs(callback, list)
     local modified = vim.api.nvim_buf_get_option(buf, 'modified')
 
     tab_info_cache[i] = {
+      index = i,
       tab = v,
       win = win,
       buf = buf,
@@ -130,14 +178,16 @@ function Tabline:make_tabs(callback, list)
       modified = modified,
     }
 
-    tab_widths[i] = helpers.estimate_tab_width(tab_info_cache[i].filename, opts.tab_padding)
+    -- Measure actual rendered width using temporary collector
+    tab_widths[i] = measure_tab(self, callback, tab_info_cache[i], tabs, current_tab)
   end
 
   local arrow_text = opts.arrow_padding .. opts.left_arrow .. opts.arrow_padding
-  local arrow_width = #arrow_text
+  local arrow_width = vim.fn.strdisplaywidth(arrow_text)
 
   local viewport = calculate_viewport(current_index, #tabs, available_width, tab_widths, arrow_width)
 
+  -- Second pass: render only visible tabs
   if viewport.has_left_overflow then
     self:use_tabline_colors()
     self:add(opts.arrow_padding .. opts.left_arrow .. opts.arrow_padding)
