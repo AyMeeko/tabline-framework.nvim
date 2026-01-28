@@ -17,6 +17,7 @@ local function calculate_viewport(active_index, total_tabs, available_width, tab
     end_idx = total_tabs,
     has_left_overflow = false,
     has_right_overflow = false,
+    truncate_last = nil,  -- width available for truncated last tab
   }
 
   local total_width = 0
@@ -73,6 +74,17 @@ local function calculate_viewport(active_index, total_tabs, available_width, tab
         break
       end
     end
+  end
+
+  -- Calculate remaining space for partial tab
+  local left_arrow_actual = vp_start > 1 and arrow_width or 0
+  local right_arrow_actual = vp_end < total_tabs and arrow_width or 0
+  local remaining = available_width - current_width - left_arrow_actual - right_arrow_actual
+
+  -- Try to include a partial tab on the right if there's overflow and remaining space
+  if vp_end < total_tabs and remaining > 3 then
+    vp_end = vp_end + 1
+    viewport.truncate_last = remaining
   end
 
   state.start = vp_start
@@ -197,6 +209,10 @@ function Tabline:make_tabs(callback, list)
     local v = tabs[i]
     local info = tab_info_cache[i]
     local current = v == current_tab
+    local is_truncated_last = (i == viewport.end_idx and viewport.truncate_last)
+
+    -- Track collector position before rendering this tab
+    local collector_start = #self.collector
 
     if current then
       self:use_tabline_sel_colors()
@@ -223,6 +239,24 @@ function Tabline:make_tabs(callback, list)
       modified = info.modified,
     })
     CurrentTab = nil
+
+    -- Truncate the last tab if it's a partial fit
+    if is_truncated_last then
+      -- Create a temporary collector with just this tab's items
+      local tab_collector = Collector()
+      for j = collector_start + 1, #self.collector do
+        tab_collector:add(self.collector[j])
+      end
+      -- Truncate the temporary collector
+      tab_collector:truncate(viewport.truncate_last)
+      -- Replace items in main collector
+      for j = #self.collector, collector_start + 1, -1 do
+        self.collector[j] = nil
+      end
+      for _, item in ipairs(tab_collector) do
+        self.collector:add(item)
+      end
+    end
   end
   self:add('%T')
 
