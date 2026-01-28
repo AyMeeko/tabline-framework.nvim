@@ -1,4 +1,5 @@
-local print_warn = require'tabline_framework.helpers'.print_warn
+local helpers = require'tabline_framework.helpers'
+local print_warn = helpers.print_warn
 local Config = require'tabline_framework.config'
 local hi = require'tabline_framework.highlights'
 local functions = require'tabline_framework.functions'
@@ -9,6 +10,76 @@ local Tabline = {}
 Tabline.__index = Tabline
 
 local CurrentTab
+
+local function calculate_viewport(active_index, total_tabs, available_width, tab_widths, arrow_width)
+  local viewport = {
+    start = 1,
+    end_idx = total_tabs,
+    has_left_overflow = false,
+    has_right_overflow = false,
+  }
+
+  local total_width = 0
+  for i = 1, total_tabs do
+    total_width = total_width + tab_widths[i]
+  end
+
+  if total_width <= available_width then
+    return viewport
+  end
+
+  local state = Config:get_viewport_state()
+  local vp_start = state.start
+
+  if active_index < vp_start then
+    vp_start = active_index
+  end
+
+  local vp_end = vp_start
+  local current_width = 0
+  local left_arrow_space = vp_start > 1 and arrow_width or 0
+
+  for i = vp_start, total_tabs do
+    local right_arrow_space = i < total_tabs and arrow_width or 0
+    local tab_width = tab_widths[i]
+
+    if current_width + tab_width + left_arrow_space + right_arrow_space <= available_width then
+      current_width = current_width + tab_width
+      vp_end = i
+    else
+      break
+    end
+  end
+
+  if active_index > vp_end then
+    vp_end = active_index
+    current_width = tab_widths[active_index]
+    vp_start = active_index
+
+    local right_arrow_space = vp_end < total_tabs and arrow_width or 0
+
+    for i = active_index - 1, 1, -1 do
+      local left_arrow_space_needed = i > 1 and arrow_width or 0
+      local tab_width = tab_widths[i]
+
+      if current_width + tab_width + left_arrow_space_needed + right_arrow_space <= available_width then
+        current_width = current_width + tab_width
+        vp_start = i
+      else
+        break
+      end
+    end
+  end
+
+  state.start = vp_start
+
+  viewport.start = vp_start
+  viewport.end_idx = vp_end
+  viewport.has_left_overflow = vp_start > 1
+  viewport.has_right_overflow = vp_end < total_tabs
+
+  return viewport
+end
 
 function Tabline:use_tabline_colors()
   self.fg = Config.hl.fg
@@ -31,14 +102,17 @@ end
 
 function Tabline:make_tabs(callback, list)
   local tabs = list or vim.api.nvim_list_tabpages()
-  for i, v in ipairs(tabs) do
-    local current_tab = vim.api.nvim_get_current_tabpage()
-    local current = current_tab == v
+  local current_tab = vim.api.nvim_get_current_tabpage()
+  local current_index = 1
 
-    if current then
-      self:use_tabline_sel_colors()
-    else
-      self:use_tabline_colors()
+  local opts = Config:get_viewport_opts()
+  local available_width = helpers.get_available_width()
+  local tab_widths = {}
+  local tab_info_cache = {}
+
+  for i, v in ipairs(tabs) do
+    if v == current_tab then
+      current_index = i
     end
 
     local win = vim.api.nvim_tabpage_get_win(v)
@@ -46,6 +120,39 @@ function Tabline:make_tabs(callback, list)
     local buf_name = vim.api.nvim_buf_get_name(buf)
     local filename = vim.fn.fnamemodify(buf_name, ":t")
     local modified = vim.api.nvim_buf_get_option(buf, 'modified')
+
+    tab_info_cache[i] = {
+      tab = v,
+      win = win,
+      buf = buf,
+      buf_name = buf_name,
+      filename = #filename > 0 and filename or nil,
+      modified = modified,
+    }
+
+    tab_widths[i] = helpers.estimate_tab_width(tab_info_cache[i].filename, opts.tab_padding)
+  end
+
+  local arrow_text = opts.arrow_padding .. opts.left_arrow .. opts.arrow_padding
+  local arrow_width = #arrow_text
+
+  local viewport = calculate_viewport(current_index, #tabs, available_width, tab_widths, arrow_width)
+
+  if viewport.has_left_overflow then
+    self:use_tabline_colors()
+    self:add(opts.arrow_padding .. opts.left_arrow .. opts.arrow_padding)
+  end
+
+  for i = viewport.start, viewport.end_idx do
+    local v = tabs[i]
+    local info = tab_info_cache[i]
+    local current = v == current_tab
+
+    if current then
+      self:use_tabline_sel_colors()
+    else
+      self:use_tabline_colors()
+    end
 
     self:add('%' .. i .. 'T')
 
@@ -58,16 +165,21 @@ function Tabline:make_tabs(callback, list)
       index = i,
       tab = v,
       current = current,
-      win = win,
-      buf = buf,
-      buf_nr = buf,
-      buf_name = buf_name,
-      filename = #filename > 0 and filename or nil,
-      modified = modified,
+      win = info.win,
+      buf = info.buf,
+      buf_nr = info.buf,
+      buf_name = info.buf_name,
+      filename = info.filename,
+      modified = info.modified,
     })
     CurrentTab = nil
   end
   self:add('%T')
+
+  if viewport.has_right_overflow then
+    self:use_tabline_colors()
+    self:add(opts.arrow_padding .. opts.right_arrow .. opts.arrow_padding)
+  end
 
   self:use_tabline_fill_colors()
   self:add('')
